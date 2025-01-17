@@ -18,75 +18,85 @@ Token :: struct {
 
 TokenTag :: enum {
         eof,
-        bang,
-        question,
-        identifier,
-        literal_number,
-        literal_string,
-        plus,
-        minus,
-        arrow_thin,
         arrow_fat,
-        equal,
-        less,
-        less_equal,
-        semicolon,
-        colon,
-        comma,
-        period,
-        ellipsis,
-        carat,
-        paren_left,
-        paren_right,
+        arrow_thin,
+        bang,
         brace_left,
         brace_right,
         bracket_left,
         bracket_right,
+        carat,
+        colon,
+        comma,
+        comment,
+        ellipsis,
+        equal,
+        greater,
+        greater_equal,
+        identifier,
+        less,
+        less_equal,
+        literal_number,
+        literal_string,
+        minus,
+        paren_left,
+        paren_right,
+        period,
+        plus,
+        question,
+        semicolon,
+        slash,
         keyword_and,
+        keyword_break,
         keyword_case,
         keyword_continue,
         keyword_dynamic,
         keyword_else,
         keyword_enum,
+        keyword_union,
+        keyword_fallthrough,
         keyword_fn,
         keyword_for,
         keyword_if,
         keyword_import,
         keyword_in,
         keyword_let,
+        keyword_map,
         keyword_match,
         keyword_mut,
         keyword_package,
         keyword_return,
         keyword_struct,
         keyword_or,
-        keyword_undefined,
         keyword_when,
         keyword_while,
 }
 
 
 keywords := map[string]TokenTag {
-        "and"       = .keyword_and,
-        "continue"  = .keyword_continue,
-        "dynamic"   = .keyword_dynamic,
-        "else"      = .keyword_else,
-        "enum"      = .keyword_enum,
-        "fn"        = .keyword_fn,
-        "for"       = .keyword_for,
-        "if"        = .keyword_if,
-        "import"    = .keyword_import,
-        "in"        = .keyword_in,
-        "let"       = .keyword_let,
-        "match"     = .keyword_match,
-        "mut"       = .keyword_mut,
-        "or"        = .keyword_or,
-        "package"   = .keyword_package,
-        "return"    = .keyword_return,
-        "struct"    = .keyword_struct,
-        "undefined" = .keyword_undefined,
-        "when"      = .keyword_when,
-        "while"     = .keyword_while,
+        "and"         = .keyword_and,
+        "break"       = .keyword_break,
+        "case"        = .keyword_case,
+        "continue"    = .keyword_continue,
+        "dynamic"     = .keyword_dynamic,
+        "else"        = .keyword_else,
+        "enum"        = .keyword_enum,
+        "fallthrough" = .keyword_fallthrough,
+        "fn"          = .keyword_fn,
+        "for"         = .keyword_for,
+        "if"          = .keyword_if,
+        "import"      = .keyword_import,
+        "in"          = .keyword_in,
+        "let"         = .keyword_let,
+        "match"       = .keyword_match,
+        "map"         = .keyword_map,
+        "mut"         = .keyword_mut,
+        "or"          = .keyword_or,
+        "package"     = .keyword_package,
+        "return"      = .keyword_return,
+        "struct"      = .keyword_struct,
+        "when"        = .keyword_when,
+        "while"       = .keyword_while,
 }
 
 
@@ -133,6 +143,8 @@ next :: proc(lxr: ^Lexer) -> Token {
                 identifier,
                 minus,
                 less,
+                slash,
+                greater,
                 period,
         }
 
@@ -162,6 +174,15 @@ next :: proc(lxr: ^Lexer) -> Token {
                         case '"':
                                 state = .literal_string
                                 result.tag = .literal_string
+                        case '/':
+                                state = .slash
+                                result.tag = .slash
+                        case '>':
+                                state = .greater
+                                result.tag = .greater
+                        case '<':
+                                state = .less
+                                result.tag = .less
                         case '.':
                                 state = .period
                                 result.tag = .period
@@ -184,9 +205,6 @@ next :: proc(lxr: ^Lexer) -> Token {
                                 result.tag = .equal
                                 lxr.index += 1
                                 break state_loop
-                        case '<':
-                                state = .less
-                                result.tag = .less
                         case ',':
                                 result.tag = .comma
                                 lxr.index += 1
@@ -258,6 +276,15 @@ next :: proc(lxr: ^Lexer) -> Token {
                                 lxr.index += 1
                         }
                         break state_loop
+                case .greater:
+                        lxr.index += 1
+                        switch lxr.source[lxr.index] {
+                        case:
+                        case '=':
+                                result.tag = .greater_equal
+                                lxr.index += 1
+                        }
+                        break state_loop
                 case .less:
                         lxr.index += 1
                         switch lxr.source[lxr.index] {
@@ -273,6 +300,15 @@ next :: proc(lxr: ^Lexer) -> Token {
                         case:
                         case '.':
                                 result.tag = .ellipsis
+                                lxr.index += 1
+                        }
+                        break state_loop
+                case .slash:
+                        lxr.index += 1
+                        switch lxr.source[lxr.index] {
+                        case:
+                        case '/':
+                                result.tag = .comment
                                 lxr.index += 1
                         }
                         break state_loop

@@ -3,6 +3,36 @@ package parser
 
 import "../lexer"
 import "core:fmt"
+import "core:os/os2"
+
+
+Ast :: struct {
+        packages: []Package,
+}
+
+
+Package :: struct {
+        fullpath: string,
+        files:    []Parser,
+}
+
+
+File :: struct {
+        fullpath:     string,
+        source:       string,
+        tokens:       []lexer.Token,
+
+
+        // Index of the next token in Parser.tokens.
+        // Do tokens_index - 1 to get the current token.
+        tokens_index: int,
+        nodes:        []Node,
+
+
+        // An array of indices into Parser.nodes or Parser.extra
+        extra:        []Index,
+        scratch:      []Index,
+}
 
 
 Parser :: struct {
@@ -14,6 +44,8 @@ Parser :: struct {
         // Do tokens_index - 1 to get the current token.
         tokens_index: int,
         nodes:        [dynamic]Node,
+
+
         // An array of indices into Parser.nodes or Parser.extra
         extra:        [dynamic]Index,
         scratch:      [dynamic]Index,
@@ -53,13 +85,8 @@ IndexScratch :: Index
 
 
 NodeTag :: enum {
-        // root.args emulate Range.
-        // main_token = 0
-        // lhs: Range.start
-        // rhs: Range.end
+        // main_token is unused
         root,
-        package_,
-        file,
 
 
         // let identifier: <?lhs> = <rhs>
@@ -87,6 +114,27 @@ NodeTag :: enum {
         // lhs: ^Range
         // rhs: ^Range
         fn_prototype,
+
+
+        // struct ?identifier { <rhs> }
+        // main_token = "struct"
+        // lhs: IndexExtra.(Range.start)
+        // rhs: IndexExtra.(Range.end)
+        decl_struct,
+
+
+        // enum(?identifier) ?identifier { <rhs> }
+        // main_token = "enum"
+        // lhs: IndexExtra.(Range.start)
+        // rhs: IndexExtra.(Range.end)
+        decl_enum,
+
+
+        // union(?enum || ?identifier) ?identifier { <rhs> }
+        // main_token = "union"
+        // lhs: IndexExtra.(Range.start)
+        // rhs: IndexExtra.(Range.end)
+        decl_union,
 
 
         // fn <lhs> { <rhs> }
@@ -177,10 +225,6 @@ NodeTag :: enum {
         op_less_or_equal,
 
 
-        // TYPES
-        type_builtin,
-
-
         // main token = "^"
         // lhs is unused
         // rhs is unused
@@ -230,24 +274,80 @@ nodetag_from_optoken := #partial [lexer.TokenTag]NodeTag {
 
 
 // A range (exclusive) of indices into Parser.extras
-// You won't see this get instantiated anywhere. Rather, it gets emulated through indices.
 Range :: struct {
         start: Index,
         end:   Index,
 }
 
 
-// Similar to Range but the fields are the direct indices of the items.
-// This is used for memory efficiency when you only need to associate 2 items with each other.
-// You won't see this get instantiated anywhere. Rather, it gets emulated through indices.
+/// Similar to Range but the fields are the direct indices of the items.
+/// It's more memory efficient than Range when you only need to associate 2 items with each other.
 Pair :: struct {
         item1: Index,
         item2: Index,
 }
 
 
-parse :: proc(p: ^Parser) {
-        assert(p != nil)
+parse :: proc(dir: string) -> Ast {
+        pkg := parse_package(dir)
+        return {}
+}
+
+
+parse_package :: proc(dir: string) -> Package {
+        files, err := os2.read_directory_by_path(dir, 0, context.allocator)
+        if err != nil {
+                fmt.eprint(err)
+                unimplemented()
+        }
+        pkg := Package {
+                fullpath = dir,
+        }
+        parsed_files := make([dynamic]File)
+        for file in files {
+                append(&parsed_files, parse_file(file.name))
+        }
+        return pkg
+}
+
+
+parse_file :: proc(fullpath: string) -> File {
+        source, err := os2.read_entire_file_from_path(fullpath, context.allocator)
+        if err != nil {
+                fmt.println(err)
+                unimplemented()
+        }
+
+
+        lxr := &lexer.Lexer{source = string(source)}
+        tokens := make([dynamic]lexer.Token)
+        for {
+                tk := lexer.next(lxr)
+                append(&tokens, tk)
+                if tk.tag == .eof {
+                        break
+                }
+        }
+
+
+        p := &Parser {
+                source = lxr.source,
+                tokens = tokens[:],
+                nodes = make([dynamic]Node),
+                extra = make([dynamic]IndexNodes),
+                scratch = make([dynamic]Index),
+        }
+
+
+        file := File {
+                fullpath = fullpath,
+                source   = lxr.source,
+                tokens   = tokens[:],
+                nodes    = p.nodes[:],
+                extra    = p.extra[:],
+        }
+
+
         assert(len(p.nodes) > 0)
         assert(p.nodes[0].tag == .root)
 
@@ -271,6 +371,9 @@ parse :: proc(p: ^Parser) {
                 case .keyword_let:
                         let := parse_decl_let(p)
                         append(&p.scratch, let)
+                case .keyword_enum:
+                        enum_ := parse_enum(p)
+                        append(&p.scratch, enum_)
                 }
         }
 
@@ -279,48 +382,42 @@ parse :: proc(p: ^Parser) {
         append(&p.extra, ..stmts)
         p.nodes[0].args.lhs = Index(len(p.extra) - len(stmts))
         p.nodes[0].args.rhs = Index(len(p.extra))
+        return file
 }
 
 
 parse_decl_package :: proc(p: ^Parser) -> IndexNodes {
-        pkg := expect_next_tk(p, .keyword_package)
-        expect_next_tk(p, .identifier)
+        pkg := next_tk_expect(p, .keyword_package)
+        next_tk_expect(p, .identifier)
         return append_node(p, Node{tag = .decl_package, main_token = pkg})
+}
+
+
+parse_type_hinted_variable :: proc(p: ^Parser, loc := #caller_location) -> IndexNodes {
+        next_tk_expect(p, .identifier)
+        next_tk_expect(p, .colon)
+        return parse_type(p)
 }
 
 
 // takes a range for both params and return values which is inefficient
 // TODO: make other node tags with a fixed param/return length
 parse_fn_prototype :: proc(p: ^Parser) -> IndexNodes {
-        before := len(p.scratch)
-        defer assert(len(p.scratch) == before)
-
-
-        fn := expect_next_tk(p, .keyword_fn)
+        fn := next_tk_expect(p, .keyword_fn)
         fn_prototype := append_node(p, Node{tag = .fn_prototype, main_token = fn})
 
 
-        expect_next_tk(p, .identifier)
-        expect_next_tk(p, .paren_left)
+        next_tk_expect(p, .identifier)
+        next_tk_expect(p, .paren_left)
         {
-                defer {
-                        range := range_ptr_from_nodes(p, p.scratch[before:])
-                        p.nodes[fn_prototype].args.lhs = range
-                        resize(&p.scratch, before)
-                }
                 #partial switch peek_tk(p^).tag {
                 case:
                         unimplemented()
                 case .identifier:
-                        for {
-                                expect_next_tk(p, .identifier)
-                                expect_next_tk(p, .colon)
-                                type := parse_type(p)
-                                append(&p.scratch, IndexNodes(type))
-                                if !next_tk_is(p, .comma) {
-                                        break
-                                }
-                        }
+                        range := parse_fields(p)
+                        range_ptr := Index(len(p.extra))
+                        append(&p.extra, range.start, range.end)
+                        p.nodes[fn_prototype].args.lhs = range_ptr
                 case .paren_right:
                         next_tk(p)
                 }
@@ -328,6 +425,7 @@ parse_fn_prototype :: proc(p: ^Parser) -> IndexNodes {
 
 
         if next_tk_is(p, .arrow_thin) {
+                before := len(p.scratch)
                 defer {
                         assert(len(p.scratch[before:]) > 0)
                         range := range_ptr_from_nodes(p, p.scratch[before:])
@@ -338,7 +436,7 @@ parse_fn_prototype :: proc(p: ^Parser) -> IndexNodes {
 
                 if next_tk_is(p, .paren_left) {
                         defer {
-                                expect_next_tk(p, .paren_right)
+                                next_tk_expect(p, .paren_right)
                                 assert(len(p.scratch[before:]) > 1)
                         }
                         for {
@@ -356,12 +454,12 @@ parse_fn_prototype :: proc(p: ^Parser) -> IndexNodes {
 
 
 parse_decl_fn :: proc(p: ^Parser) -> IndexNodes {
-        fn := expect_next_tk(p, .keyword_fn)
+        fn := next_tk_expect(p, .keyword_fn)
         decl_fn := append_node(p, Node{tag = .decl_fn, main_token = fn})
         defer assert(p.nodes[decl_fn].args.lhs != p.nodes[decl_fn].args.rhs)
 
 
-        expect_next_tk(p, .identifier)
+        next_tk_expect(p, .identifier)
         {fn_prototype := parse_fn_prototype(p)
                 assert(fn_prototype != 0)
                 p.nodes[decl_fn].args.lhs = fn_prototype
@@ -372,6 +470,90 @@ parse_decl_fn :: proc(p: ^Parser) -> IndexNodes {
 
 
         return decl_fn
+}
+
+
+parse_fields :: proc(p: ^Parser) -> (range: Range) {
+        before := len(p.scratch)
+        defer {
+                start, end := range_from_nodes(p, p.scratch[before:])
+                range = Range {
+                        start = start,
+                        end   = end,
+                }
+                resize(&p.scratch, before)
+        }
+        append(&p.scratch, parse_type_hinted_variable(p))
+        for !next_tk_is(p, .comma) {
+                append(&p.scratch, parse_type_hinted_variable(p))
+        }
+        return
+}
+
+
+parse_struct :: proc(p: ^Parser) -> IndexNodes {
+        struct_ := next_tk_expect(p, .keyword_struct)
+        decl_struct := append_node(p, {tag = .decl_struct, main_token = struct_})
+        assert(next_tk_is(p, .identifier) || !next_tk_is(p, .identifier))
+        {
+                next_tk_expect(p, .brace_left)
+                defer next_tk_expect(p, .brace_right)
+                range := parse_fields(p)
+                p.nodes[decl_struct].args = {
+                        lhs = range.start,
+                        rhs = range.end,
+                }
+        }
+        return decl_struct
+}
+
+
+parse_enum :: proc(p: ^Parser) -> IndexNodes {
+        enum_ := next_tk_expect(p, .keyword_enum)
+        decl_enum := append_node(p, {tag = .decl_enum, main_token = enum_})
+        if next_tk_is(p, .identifier) && next_tk_is(p, .paren_left) {
+                next_tk_expect(p, .identifier)
+                next_tk_expect(p, .paren_right)
+        }
+
+
+        {
+                next_tk_expect(p, .brace_left)
+                defer next_tk_expect(p, .brace_right)
+                range := parse_fields(p)
+                p.nodes[decl_enum].args = {
+                        lhs = range.start,
+                        rhs = range.end,
+                }
+        }
+        return decl_enum
+}
+
+
+parse_union :: proc(p: ^Parser) -> IndexNodes {
+        union_ := next_tk_expect(p, .keyword_union)
+        decl_union := append_node(p, {tag = .decl_union, main_token = union_})
+        if next_tk_is(p, .paren_left) {
+                assert(next_tk_is(p, .identifier) || next_tk_is(p, .keyword_enum))
+                next_tk_expect(p, .paren_right)
+        }
+
+
+        {ok := next_tk_is(p, .identifier)
+                assert(ok || !ok)
+        }
+
+
+        {
+                next_tk_expect(p, .brace_left)
+                defer next_tk_expect(p, .brace_right)
+                range := parse_fields(p)
+                p.nodes[decl_union].args = {
+                        lhs = range.start,
+                        rhs = range.end,
+                }
+        }
+        return decl_union
 }
 
 
@@ -389,18 +571,18 @@ parse_type :: proc(p: ^Parser) -> IndexNodes {
                 if next_tk_is(p, .keyword_mut) {
                         p.nodes[type].tag = .ptr_mutate
                 }
-                expect_next_tk(p, .identifier)
+                next_tk_expect(p, .identifier)
         case .bracket_left:
                 p.nodes[type].tag = .slice
                 if next_tk_is(p, .keyword_dynamic) {
                         p.nodes[type].tag = .slice_dynamic
                 }
-                expect_next_tk(p, .bracket_right)
+                next_tk_expect(p, .bracket_right)
                 if next_tk_is(p, .keyword_mut) {
                         assert(p.nodes[type].tag == .slice)
                         p.nodes[type].tag = .slice_mutate
                 }
-                expect_next_tk(p, .identifier)
+                next_tk_expect(p, .identifier)
         }
         return IndexNodes(len(p.nodes) - 1)
 }
@@ -411,13 +593,13 @@ parse_stmt_block :: proc(p: ^Parser) -> IndexNodes {
         defer resize(&p.scratch, before)
 
 
-        brace_left := expect_next_tk(p, .brace_left)
+        brace_left := next_tk_expect(p, .brace_left)
         stmt_block := append_node(p, Node{tag = .stmt_block, main_token = brace_left})
         defer assert(p.nodes[stmt_block].args.lhs <= p.nodes[stmt_block].args.rhs)
 
 
         for !next_tk_is(p, .brace_right) {
-                append(&p.scratch, parse_stmt(p))
+                append(&p.scratch, parse_any_stmt(p))
         }
         stmts := p.scratch[before:]
         append(&p.extra, ..stmts)
@@ -433,7 +615,7 @@ parse_stmt_block :: proc(p: ^Parser) -> IndexNodes {
 }
 
 
-parse_stmt :: proc(p: ^Parser) -> IndexNodes {
+parse_any_stmt :: proc(p: ^Parser) -> IndexNodes {
         #partial switch peek_tk(p^).tag {
         case:
                 fmt.println(peek_tk(p^))
@@ -464,7 +646,7 @@ parse_stmt :: proc(p: ^Parser) -> IndexNodes {
 
 
 parse_stmt_return :: proc(p: ^Parser) -> IndexNodes {
-        return_ := expect_next_tk(p, .keyword_return)
+        return_ := next_tk_expect(p, .keyword_return)
         return_value := parse_expr(p)
         stmt_return := append_node(
                 p,
@@ -475,12 +657,12 @@ parse_stmt_return :: proc(p: ^Parser) -> IndexNodes {
 
 
 parse_stmt_if :: proc(p: ^Parser) -> IndexNodes {
-        if_ := expect_next_tk(p, .keyword_if)
+        if_ := next_tk_expect(p, .keyword_if)
         stmt_if := append_node(p, {tag = .stmt_if, main_token = if_})
         is_decl_if_let := next_tk_is(p, .keyword_let)
         if is_decl_if_let {
                 p.nodes[stmt_if].args.lhs = parse_decl_let(p)
-                expect_next_tk(p, .semicolon)
+                next_tk_expect(p, .semicolon)
         }
         if condition := parse_expr(p); !is_decl_if_let {
                 p.nodes[stmt_if].args.lhs = condition
@@ -506,13 +688,13 @@ parse_stmt_if :: proc(p: ^Parser) -> IndexNodes {
 
 
 parse_stmt_for :: proc(p: ^Parser) -> IndexNodes {
-        for_ := expect_next_tk(p, .keyword_for)
+        for_ := next_tk_expect(p, .keyword_for)
         stmt_for := append_node(p, {tag = .stmt_for, main_token = for_})
-        expect_next_tk(p, .identifier)
+        next_tk_expect(p, .identifier)
         for !next_tk_is(p, .comma) {
-                expect_next_tk(p, .identifier)
+                next_tk_expect(p, .identifier)
         }
-        expect_next_tk(p, .keyword_in)
+        next_tk_expect(p, .keyword_in)
         p.nodes[stmt_for].args = {
                 lhs = parse_expr(p),
                 rhs = parse_stmt_block(p),
@@ -528,7 +710,7 @@ parse_stmt_for :: proc(p: ^Parser) -> IndexNodes {
 
 
 parse_stmt_while :: proc(p: ^Parser) -> IndexNodes {
-        while := expect_next_tk(p, .keyword_while)
+        while := next_tk_expect(p, .keyword_while)
         stmt_while := append_node(p, {tag = .stmt_while, main_token = while})
 
 
@@ -536,7 +718,7 @@ parse_stmt_while :: proc(p: ^Parser) -> IndexNodes {
                 decl_let: IndexNodes
                 if next_tk_is(p, .keyword_let) {
                         decl_let = parse_decl_let(p)
-                        expect_next_tk(p, .semicolon)
+                        next_tk_expect(p, .semicolon)
                 }
                 condition := parse_expr(p)
                 continue_expr: IndexNodes
@@ -556,27 +738,28 @@ parse_stmt_while :: proc(p: ^Parser) -> IndexNodes {
                 if next_tk_is(p, .keyword_else) {
                         else_block = parse_stmt_block(p)
                 }
-                pair_from_nodes(p, block, else_block)
+                pair := pair_from_nodes(p, block, else_block)
+                p.nodes[stmt_while].args.rhs = pair
         }
         return stmt_while
 }
 
 
 parse_decl_import :: proc(p: ^Parser) -> IndexNodes {
-        import_ := expect_next_tk(p, .keyword_import)
+        import_ := next_tk_expect(p, .keyword_import)
         decl_import := append_node(p, {tag = .decl_import, main_token = import_})
         if next_tk_is(p, .identifier) {
                 p.nodes[decl_import].args.lhs = IndexTokens(p.tokens_index - 1)
         }
-        expect_next_tk(p, .literal_string)
+        next_tk_expect(p, .literal_string)
         return decl_import
 }
 
 
 parse_decl_let :: proc(p: ^Parser) -> IndexNodes {
-        let := expect_next_tk(p, .keyword_let)
+        let := next_tk_expect(p, .keyword_let)
         decl_let := append_node(p, Node{tag = .decl_let, main_token = let})
-        expect_next_tk(p, .identifier)
+        next_tk_expect(p, .identifier)
 
 
         if next_tk_is(p, .colon) {
@@ -585,7 +768,7 @@ parse_decl_let :: proc(p: ^Parser) -> IndexNodes {
         }
 
 
-        expect_next_tk(p, .equal)
+        next_tk_expect(p, .equal)
         p.nodes[decl_let].args.rhs = parse_expr(p)
 
 
@@ -650,7 +833,7 @@ parse_fn_call :: proc(p: ^Parser) -> (fn_call: IndexNodes) {
         fn_call = append_node(p, Node{tag = .expr_call, main_token = p.tokens_index})
 
 
-        expect_next_tk(p, .paren_left)
+        next_tk_expect(p, .paren_left)
         if next_tk_is(p, .paren_right) {
                 return
         }
@@ -663,7 +846,7 @@ parse_fn_call :: proc(p: ^Parser) -> (fn_call: IndexNodes) {
                 if next_tk_is(p, .paren_right) {
                         break
                 }
-                expect_next_tk(p, .comma)
+                next_tk_expect(p, .comma)
         }
         start, end := range_from_nodes(p, p.scratch[before:])
         p.nodes[fn_call].args = {
@@ -676,21 +859,35 @@ parse_fn_call :: proc(p: ^Parser) -> (fn_call: IndexNodes) {
 }
 
 
-peek_tk :: proc(p: Parser) -> lexer.Token {
-        assert(len(p.tokens) > 0)
-        assert(p.tokens_index < len(p.tokens))
+peek_tk :: proc(p: Parser, loc := #caller_location) -> lexer.Token {
+        assert(len(p.tokens) > 0, loc = loc)
+        assert(p.tokens_index < len(p.tokens), loc = loc)
         return p.tokens[p.tokens_index]
 }
 
 
-next_tk :: proc(p: ^Parser) -> int {
-        assert(p != nil)
-        assert(p^.tokens_index < len(p^.tokens))
-
-
+next_tk :: proc(p: ^Parser, loc := #caller_location) -> int {
+        assert(p^.tokens_index < len(p^.tokens), loc = loc)
         tk_i := p.tokens_index
         p^.tokens_index += 1
         return tk_i
+}
+
+
+next_tk_expect :: proc(p: ^Parser, tag: lexer.TokenTag, loc := #caller_location) -> int {
+        tk := next_tk(p)
+        assert(tk < len(p.tokens), loc = loc)
+        assert(p.tokens[tk].tag == tag, loc = loc)
+        return tk
+}
+
+
+next_tk_is :: proc(p: ^Parser, tag: lexer.TokenTag) -> bool {
+        ok := peek_tk(p^).tag == tag
+        if ok {
+                next_tk(p)
+        }
+        return ok
 }
 
 
@@ -765,25 +962,8 @@ check_literal_number :: proc(
 }
 
 
-next_tk_is :: proc(p: ^Parser, tag: lexer.TokenTag) -> bool {
-        ok := peek_tk(p^).tag == tag
-        if ok {
-                next_tk(p)
-        }
-        return ok
-}
-
-
-expect_next_tk :: proc(p: ^Parser, tag: lexer.TokenTag, loc := #caller_location) -> int {
-        tk := next_tk(p)
-        assert(tk < len(p.tokens), loc = loc)
-        assert(p.tokens[tk].tag == tag, loc = loc)
-        return tk
-}
-
-
-// Appends multiple nodes to parser.extra. Used for when a list of nodes is not guaranteed
-// to be next to each other. 
+// Appends multiple nodes to parser.extra. Used for when a list of related nodes is not guaranteed
+// to be next to each other in the array. 
 range_from_nodes :: proc(
         p: ^Parser,
         indices: []IndexNodes,
