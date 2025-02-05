@@ -1,0 +1,7 @@
+package main
+
+import "core:fmt"
+
+fn main() {
+        fmt.println("Hello, 世界")
+}

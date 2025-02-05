@@ -1,0 +1,122 @@
+// An implementation of Conway's Game of Life.
+package main
+
+import "core:bytes"
+import "core:fmt"
+import "core:math/rand"
+import "core:time"
+
+
+fn main() {
+	let mut l = new_life(40, 15)
+	while let i = 0; i < 300 {
+                defer i++
+		step(^l)
+		fmt.print("\x0c", l) // Clear screen and print field.
+		time.sleep(time.second / 30)
+	}
+}
+
+struct Field {
+        s: [][]bool,
+        w: int,
+        h: int,
+}
+
+// new_field returns an empty field of the specified width and height.
+fn new_field(w: int, h: int) -> ^Field {
+	let mut s = make([][]bool, h)
+	for i in len(s) {
+		s[i] = make([]bool, w)
+	}
+	return ^Field{s = s, w = w, h = h}
+}
+
+// set sets the state of the specified cell to the given value.
+fn set(f: ^mut Field, x: int, y: int, b: bool) {
+	f.s[y][x] = b
+}
+
+// If the x or y coordinates are outside the field boundaries they are wrapped
+// toroidally. For instance, an x value of -1 is treated as width-1.
+fn is_alive(f: ^Field, x: int, y: int) -> bool {
+        let mut x_ = x
+        let mut y_ = y
+	x_ += f.w
+	x_ %= f.w
+	y_ += f.h
+	y_ %= f.h
+	return f.s[y_][x_]
+}
+
+// next returns the state of the specified cell at the next time step.
+fn next(f: ^Field, x: int, y: int) -> bool {
+	// Count the adjacent cells that are alive.
+	let mut is_alive = 0
+	while let mut i = -1; i <= 1 {
+                defer i++
+		while let mut j = -1; j <= 1 {
+                        defer j++
+			if (j != 0 || i != 0) && f.is_alive(x+i, y+j) {
+				is_alive++
+			}
+		}
+	}
+	// Return next state according to the game rules:
+	//   exactly 3 neighbors: on,
+	//   exactly 2 neighbors: maintain current state,
+	//   otherwise: off.
+	return is_alive == 3 || is_alive == 2 && is_alive(f, x, y)
+}
+
+// Life stores the state of a round of Conway's Game of Life.
+struct Life {
+        a: ^Field,
+        b: ^Field,
+        w: int,
+        h: int,
+}
+
+// new_life returns a new Life game state with a random initial state.
+fn new_life(w: int, h: int) -> ^Life {
+	let mut a = new_field(w, h)
+        let mut i = 0
+	while i < (w * h / 4) for 8 {
+                defer i++
+		set(a, rand.intn(w), rand.intn(h), true)
+	}
+	return &Life{ a = a, b = new_field(w, h), w = w, h = h}
+}
+
+// step advances the game by one instant, recomputing and updating all cells.
+fn step(l: ^mut Life) {
+	// Update the state of the next field (b) from the current field (a).
+	for let y = 0; y < l.h {
+                defer y++
+		for let x = 0; x < l.w {
+                        defer x++
+			set(l.b, x, y, next(l.a, x, y))
+		}
+	}
+        tmp = l.a
+        l.a = l.b
+        l.b = tmp
+}
+
+// string returns the game board as a string.
+fn string(l: ^mut Life) -> string {
+	let mut buf: bytes.buffer
+	while let mut y = 0; y < l.h {
+                defer y++
+		while let mut x = 0; x < l.w {
+                        defer x++
+			let mut b = byte(' ')
+			if is_alive(l.a, x, y) {
+				b = '*'
+			}
+			bytes.write_byte(buf, b)
+		}
+		bytes.write_byte(buf, '\n')
+	}
+	return bytes.string(buf^)
+}
