@@ -1,6 +1,13 @@
 package ast
 
 
+import "../lexer"
+import "../parser"
+import "base:runtime"
+import "core:fmt"
+import "core:io"
+
+
 Ast :: struct {
         source: string,
         tokens: []lexer.Token,
@@ -54,12 +61,13 @@ init :: proc(source: string, allocator := context.allocator) -> Ast {
 
 
         p := parser.Parser {
-                source = source,
-                tokens = tokens[:],
-                nodes  = make([dynamic]parser.Node),
-                extra  = make([dynamic]IndexNodes),
+                source  = source,
+                tokens  = tokens[:],
+                nodes   = make([dynamic]parser.Node),
+                extra   = make([dynamic]IndexNodes),
+                scratch = make([dynamic]Index),
         }
-        append(&p.nodes, parser.Node{tag = .root})
+        append(&p.nodes, parser.Node{Parser = .root})
         parser.parse(&p)
 
 
@@ -79,6 +87,7 @@ destroy :: proc(p: ^Ast) -> runtime.Allocator_Error {
         delete(p.tokens) or_return
         delete(p.nodes) or_return
         delete(p.extra) or_return
+        delete(p.scratch) or_return
         return nil
 }
 
@@ -201,10 +210,3 @@ Decl_Fn_Node :: struct {
         params:     []IndexNodes,
         stmt_block: IndexNodes,
 }
-
-
-import "../lexer"
-import "../parser"
-import "base:runtime"
-import "core:fmt"
-import "core:io"

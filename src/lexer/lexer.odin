@@ -51,6 +51,7 @@ TokenTag :: enum {
         keyword_case,
         keyword_continue,
         keyword_dynamic,
+        keyword_distinct,
         keyword_else,
         keyword_enum,
         keyword_union,
@@ -73,30 +74,59 @@ TokenTag :: enum {
 }
 
 
-keywords := map[string]TokenTag {
-        "and"         = .keyword_and,
-        "break"       = .keyword_break,
-        "case"        = .keyword_case,
-        "continue"    = .keyword_continue,
-        "dynamic"     = .keyword_dynamic,
-        "else"        = .keyword_else,
-        "enum"        = .keyword_enum,
-        "fallthrough" = .keyword_fallthrough,
-        "fn"          = .keyword_fn,
-        "for"         = .keyword_for,
-        "if"          = .keyword_if,
-        "import"      = .keyword_import,
-        "in"          = .keyword_in,
-        "let"         = .keyword_let,
-        "match"       = .keyword_match,
-        "map"         = .keyword_map,
-        "mut"         = .keyword_mut,
-        "or"          = .keyword_or,
-        "package"     = .keyword_package,
-        "return"      = .keyword_return,
-        "struct"      = .keyword_struct,
-        "when"        = .keyword_when,
-        "while"       = .keyword_while,
+keywords :: proc(str: string) -> TokenTag {
+        switch str {
+        case:
+                return nil
+        case "and":
+                return .keyword_and
+        case "break":
+                return .keyword_break
+        case "case":
+                return .keyword_case
+        case "continue":
+                return .keyword_continue
+        case "distinct":
+                return .keyword_distinct
+        case "dynamic":
+                return .keyword_dynamic
+        case "else":
+                return .keyword_else
+        case "enum":
+                return .keyword_enum
+        case "fallthrough":
+                return .keyword_fallthrough
+        case "fn":
+                return .keyword_fn
+        case "for":
+                return .keyword_for
+        case "if":
+                return .keyword_if
+        case "import":
+                return .keyword_import
+        case "in":
+                return .keyword_in
+        case "let":
+                return .keyword_let
+        case "match":
+                return .keyword_match
+        case "map":
+                return .keyword_map
+        case "mut":
+                return .keyword_mut
+        case "or":
+                return .keyword_or
+        case "package":
+                return .keyword_package
+        case "return":
+                return .keyword_return
+        case "struct":
+                return .keyword_struct
+        case "when":
+                return .keyword_when
+        case "while":
+                return .keyword_while
+        }
 }
 
 
@@ -120,6 +150,7 @@ types := []string {
 
         // Unsigned Integers
         "int",
+        "byte",
         "u8",
         "u16",
         "u32",
@@ -260,8 +291,8 @@ next :: proc(lxr: ^Lexer) -> Token {
                         switch lxr.source[lxr.index] {
                         case:
                                 ident := lxr.source[result.loc.start:lxr.index]
-                                kw, ok := keywords[ident]
-                                if ok {
+                                kw := keywords(ident)
+                                if kw != nil {
                                         result.tag = kw
                                 }
                                 break state_loop

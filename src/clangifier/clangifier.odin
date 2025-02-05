@@ -1,6 +1,15 @@
 package clangifier
 
 
+import "../ast"
+import "../parser"
+import "core:fmt"
+import "core:io"
+import "core:os/os2"
+import "core:path/filepath"
+import "core:strings"
+
+
 OUT_BASE_DIR :: "./sige-out"
 
 
@@ -70,12 +79,3 @@ create_src_and_header_from_sige :: proc(
 crash :: proc(err: any, loc := #caller_location) {
         fmt.panicf("%s\n\t%q\n", loc, err)
 }
-
-
-import "../ast"
-import "../parser"
-import "core:fmt"
-import "core:io"
-import "core:os/os2"
-import "core:path/filepath"
-import "core:strings"

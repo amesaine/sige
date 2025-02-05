@@ -1,6 +1,10 @@
 package clangifier
 
 
+import "core:os/os2"
+import "core:path/filepath"
+
+
 create_intrinsics :: proc() -> (src, header: ^os2.File) {
         err: os2.Error
         src, err = os2.create(filepath.join({OUT_BASE_DIR, "intrinsics.c"}))
@@ -17,7 +21,3 @@ typedef struct String {
         unsigned int len;
 } String;
 `
-
-
-import "core:os/os2"
-import "core:path/filepath"
