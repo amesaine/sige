@@ -20,8 +20,9 @@ fn main() {
 
 - Compiles to C
 - Interfaces are not first-class citizens
-- No degenerate error types
+- No degenerate error type
 - Unbounded functions (no methods)
+- Scope-based defer
 - All declarations such as functions, variables, struct fields, etc. are always public.
 - Const is default
 - No variable shadowing
